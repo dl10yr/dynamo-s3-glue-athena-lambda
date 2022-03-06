@@ -1,0 +1,58 @@
+service: dynamo-s3-glue-athena-lambda
+frameworkVersion: '2'
+variablesResolutionMode: 20210326
+
+custom:
+  defaultStage: dev
+  defaultRegion: ap-northeast-1
+
+provider:
+  name: aws
+  region: ${opt:region, self:custom.defaultRegion}
+  stage: ${opt:stage, self:custom.defaultStage}
+  runtime: nodejs14.x
+  memorySize: 128
+  lambdaHashingVersion: 20201221
+  deploymentBucket: ${self:service}-${self:provider.stage}-lambda
+  iam: 
+    role: ${ssm:/${self:service}/${self:provider.stage}/lambda-role-arn}
+  environment:
+    TABLE_EXPORT_S3_BUCKET: ${self:service}-${self:provider.stage}-table-export
+    QUERY_RESULT_S3_BUCKET: ${self:service}-${self:provider.stage}-query-result
+    DYNAMO_TABLE_ARN: ${ssm:/${self:service}/${self:provider.stage}/users-table-arn}
+    GLUE_CRAWLER_NAME: ${self:service}-${self:provider.stage}-glue-crawler
+    GLUE_DATABASE_NAME: ${self:service}-${self:provider.stage}-glue-database
+    GLUE_TABLE_NAME: data
+    GLUE_CRAWLER_ROLE_ARN: ${ssm:/${self:service}/${self:provider.stage}/glue-crawler-role-arn}
+    SSM_S3_EXPORT_ARN_PATH: /${self:service}/${self:provider.stage}/s3-export-arn
+
+functions:
+  index:
+    handler: dist/index.handler
+    events:
+      - schedule:
+          rate: cron(0 10 * * ? *)
+          enabled: true
+          input:
+            eventType: exportTable
+      - s3:
+          bucket: ${self:service}-${self:provider.stage}-table-export
+          event: 's3:ObjectCreated:*'
+          existing: true
+          rules:
+            - suffix: manifest-summary.json
+      - eventBridge:
+          pattern:
+            source:
+              - 'aws.glue'
+            detail-type:
+              - 'Glue Crawler State Change'
+            detail:
+              state:
+                - 'Succeeded'
+          input:
+            eventType: report
+
+package:
+  patterns:
+    - '!terraform/**'
